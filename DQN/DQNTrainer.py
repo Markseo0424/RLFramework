@@ -68,7 +68,7 @@ class DQNTrainer(RLTrainer):
             target_Q = current_Q
             target_Q[action] += self.alpha * reward + self.gamma * (next_max_Q - current_Q[action])
 
-            self.qnet.train_batch(state, target_Q, nn.MSELoss(), 1)
+            loss = self.qnet.train_batch(state, target_Q, nn.MSELoss(), 1)
 
         else:
             batches = self.replay_buffer.sample(self.batch_size)
@@ -95,6 +95,8 @@ class DQNTrainer(RLTrainer):
 
             if self.timestep % self.target_update_freq == 0:
                 self.tqnet.load_state_dict(self.qnet.state_dict())
+
+        return loss.item()
 
     def check_train(self):
         """
