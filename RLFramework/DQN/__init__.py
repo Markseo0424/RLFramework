@@ -1,2 +1,2 @@
-from DQNTrainer import *
-from ReplayBuffer import *
+from .DQNTrainer import *
+from .ReplayBuffer import *
