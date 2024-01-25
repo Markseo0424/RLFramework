@@ -5,7 +5,7 @@ a framework for Reinforcement Learning Project.
 
 ### Install
 ```
-pip install git+https://github.com/Markseo0424/RLFramework.git
+pip install RLFramework
 ```
 
 It can be utilized by overriding Environment, Agent, Trainer, Network class.
