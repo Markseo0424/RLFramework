@@ -29,6 +29,7 @@ class ActorCriticTrainer(RLTrainer):
         :param action: Current action of an agent.
         :param reward: Current reward of current state-action set.
         :param next_state: Next state of an environment.
+        :return A tuple of (policy loss, value loss) of the train step.
         Train by Actor-Critic method.
         Expect unbatched input.
         """

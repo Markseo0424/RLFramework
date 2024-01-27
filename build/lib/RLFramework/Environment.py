@@ -54,7 +54,7 @@ class Environment(ABC):
         :return: Next state of environment. None if it is termination state.
         Update parameters, return next state.
         Corresponds to P(s,a).
-        States must be numpy array when using Deep RL Trainers.
+        States must be unbatched numpy array when using Deep RL Trainers.
         """
         pass
 

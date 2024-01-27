@@ -78,17 +78,22 @@ class DQNTrainer(RLTrainer):
         :param action: Current action of an agent.
         :param reward: Current reward of current state-action set.
         :param next_state: Next state of an environment.
+        :return Loss of the train step.
         Train by DQN method.
         Expect unbatched input.
         """
         if not self.use_replay_buffer:
             current_Q = self.q_net.predict(state)
-            next_max_Q = torch.max(self.target_q_net.predict(next_state))
+
+            if next_state is None:
+                next_max_Q = 0
+            else:
+                next_max_Q = torch.max(self.target_q_net.predict(next_state))
 
             target_Q = current_Q
             target_Q[action] += self.alpha * reward + self.gamma * (next_max_Q - current_Q[action])
 
-            loss = self.q_net.train_batch(state, target_Q, self.loss_function, 1)
+            loss = self.q_net.train_batch(state, target_Q.cpu().detach().numpy(), self.loss_function, self.grad_clip)
 
         else:
             batches = self.replay_buffer.sample(self.batch_size)
@@ -98,25 +103,24 @@ class DQNTrainer(RLTrainer):
 
             for _state, _action, _reward, _next_state in batches:
                 current_Q = self.q_net.predict(_state)
-                next_Q = self.target_q_net.predict(_next_state)
 
-                if next_Q is None:
+                if _next_state is None:
                     next_max_Q = 0
                 else:
-                    next_max_Q = torch.max(next_Q)
+                    next_max_Q = torch.max(self.target_q_net.predict(_next_state))
 
                 target_Q = current_Q
-                target_Q[0, _action] += self.alpha * (_reward + self.gamma * next_max_Q - current_Q[0, _action])
+                target_Q[_action] += self.alpha * (_reward + self.gamma * next_max_Q - current_Q[_action])
 
                 x.append(_state)
                 y.append(target_Q.cpu().detach().numpy())
 
-            loss = self.q_net.train_batch(np.stack(x, axis=0), np.stack(y, axis=0), nn.MSELoss(), self.grad_clip)
+            loss = self.q_net.train_batch(np.stack(x, axis=0), np.stack(y, axis=0), self.loss_function, self.grad_clip)
 
             if self.timestep % self.target_update_freq == 0:
                 self.target_q_net.load_state_dict(self.q_net.state_dict())
 
-        return loss.item()
+        return loss
 
     def check_train(self):
         """

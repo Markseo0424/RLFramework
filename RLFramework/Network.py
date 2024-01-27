@@ -25,12 +25,11 @@ class Network(nn.Module):
         :param x: Input data.
         :return: Output of network.
         """
-        if x is None:
-            return None
-
         self.eval()
+
         with torch.no_grad():
             res = self(torch.FloatTensor(x).to(self.device))
+
         return res
 
     def train_batch(self, x, y, loss_function, clip: float = None):
