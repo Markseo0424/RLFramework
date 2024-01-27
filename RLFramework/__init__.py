@@ -7,3 +7,4 @@ from .ActorCritic import *
 from .QActorCritic import *
 from .A2C import *
 from .A3C import *
+from .TRPO import *

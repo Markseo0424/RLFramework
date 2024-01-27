@@ -31,7 +31,7 @@ class Environment(ABC):
         self.timestep += 1
         old_state = self._state
         self._state = self.update(self._state, self._action)
-        self._reward = self.reward(old_state, self._action)
+        self._reward = self.reward(old_state, self._action, self._state)
 
     # getters
     def get_state(self):
@@ -59,13 +59,14 @@ class Environment(ABC):
         pass
 
     @abc.abstractmethod
-    def reward(self, state, action):
+    def reward(self, state, action, next_state):
         """
         :param state: Previous state of environment.
         :param action: Previous action of environment.
+        :param next_state: Current action of environment.
         :return: Reward of previous state-action set.
         Gives reward based on previous state and action.
-        Corresponds to R(s,a).
+        Corresponds to R(s,a,s').
         """
         pass
 
