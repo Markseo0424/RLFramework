@@ -34,7 +34,7 @@ class TRPOTrainer(RLTrainer):
     def _hessian_vector_product(self, grad, param):
         return lambda v: torch.autograd.grad(grad.T @ v, param, retain_graph=True)[0].reshape((-1, 1)) + self.damping * v
 
-    def _conjugate_gradient(self, A, b):
+    def _conjugate_gradient(self, A, b, break_bound=1e-7):
         x = torch.zeros(b.shape).to(self.policy_net.device)
         r = b
         v = torch.clone(r)
@@ -45,6 +45,10 @@ class TRPOTrainer(RLTrainer):
             prev_r = torch.clone(r)
             x = x + alpha * v
             r = r - alpha * Av
+
+            if r.T @ r < break_bound:
+                return x
+
             v = r + ((r.T @ r) / (prev_r.T @ prev_r + 1e-7)) * v
 
         return x
@@ -130,7 +134,7 @@ class TRPOTrainer(RLTrainer):
             obj = obj + policy[actions[i]] / (old_policies[i][actions[i]] + 1e-7) * advantages[i]
 
         obj = obj / len(states)
-        old_policies = torch.stack(policies).detach()
+        old_policies = torch.stack(old_policies)
         policies = torch.stack(policies)
 
         kld = torch.nn.functional.kl_div(torch.log(policies + 1e-7), old_policies, reduction="batchmean")
@@ -159,10 +163,10 @@ class TRPOTrainer(RLTrainer):
 
         if updated:
             self.batch_memory = []
-            return updated, new_obj, new_kld
+            return updated, obj, new_obj, new_kld
 
         else:
-            return updated, obj, kld
+            return updated, obj, obj, kld
 
     def memory(self):
         self.steps += 1
