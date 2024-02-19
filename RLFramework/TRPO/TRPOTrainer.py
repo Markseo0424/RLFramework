@@ -26,6 +26,7 @@ class TRPOTrainer(RLTrainer):
         self.damping = damping
 
         self.update_vectors = None
+        self.grads = None
 
         self.steps = 0
         self.batch_memory = []
@@ -74,19 +75,22 @@ class TRPOTrainer(RLTrainer):
         update = beta * s
         update = update.reshape(param.shape)
 
-        return update
+        return grad, update
 
     def _get_update_vectors(self, obj, kld):
         update_vectors = {}
+        grads = {}
 
         state_dict = self.policy_net.state_dict(keep_vars=True)
 
         for name in state_dict:
             param = state_dict[name]
-            update = self._get_update_vector(param, obj, kld)
+            grad, update = self._get_update_vector(param, obj, kld)
             update_vectors[name] = update
+            grads[name] = grad
 
         self.update_vectors = update_vectors
+        self.grads = grads
 
     def _update_params(self, source_network: torch.nn.Module, alpha, i):
         if self.update_vectors is None:
@@ -160,7 +164,8 @@ class TRPOTrainer(RLTrainer):
         expected_improve = 0
         for name in self.update_vectors:
             v = self.update_vectors[name].reshape(-1)
-            expected_improve += v.T @ v
+            g = self.grads[name].reshape(-1)
+            expected_improve += v.T @ g
         print(f"expected improve : {expected_improve}")
 
         updated = False
