@@ -159,7 +159,7 @@ class TRPOTrainer(RLTrainer):
 
         expected_improve = 0
         for name in self.update_vectors:
-            v = self.update_vectors[name]
+            v = self.update_vectors[name].reshape(-1)
             expected_improve += v.T @ v
         print(f"expected improve : {expected_improve}")
 
