@@ -35,16 +35,20 @@ class TRPOTrainer(RLTrainer):
         return lambda v: torch.autograd.grad(grad.T @ v, param, retain_graph=True)[0].reshape((-1, 1)) + self.damping * v
 
     def _conjugate_gradient(self, A, b, break_bound=1e-7):
+        print("conjugate gradient start : ")
+
         x = torch.zeros(b.shape).to(self.policy_net.device)
         r = b
         v = torch.clone(r)
 
         for i in range(self.CG_iter):
             Av = A(v)
-            alpha = (r.T @ r) / (v.T @ Av + 1e-9)
+            alpha = (r.T @ r) / (v.T @ Av + 1e-8)
             prev_r = torch.clone(r)
             x = x + alpha * v
             r = r - alpha * Av
+
+            print(f"  iter {i} : r = {r.T@r}")
 
             if r.T @ r < break_bound:
                 return x
@@ -63,7 +67,9 @@ class TRPOTrainer(RLTrainer):
         A = self._hessian_vector_product(kld_grad, param)
         s = self._conjugate_gradient(A, grad)
 
-        beta = torch.sqrt(2 * self.delta / (s.T @ grad + 1e-7))
+        beta = torch.sqrt(2 * self.delta / abs(s.T @ A(s) + 1e-7))
+
+        print(f"beta : {beta}")
 
         update = beta * s
         update = update.reshape(param.shape)
@@ -106,22 +112,26 @@ class TRPOTrainer(RLTrainer):
         states = []
         actions = []
         old_policies = []
-        q_values = []
         advantages = []
 
-        for _state, _action, _qvalue, _next_state in memory:
+        print(f"start policy optimization. memory size : {len(memory)}")
+
+        for _state, _action, _reward, _next_state in memory:
             current_value = self.value_net.predict(_state)
 
-            advantage = _qvalue - current_value
+            if _next_state is not None:
+                pred_next_value = self.value_net.predict(_next_state).item()
+            else:
+                pred_next_value = 0
+
+            advantage = self.gamma * pred_next_value + _reward - current_value
 
             states.append(_state)
             actions.append(_action)
             old_policies.append(self.policy_net.predict(_state))
-            q_values.append(_qvalue)
             advantages.append(advantage)
 
-        # update value network
-        self.value_net.train_batch(np.stack(states), np.stack(q_values).reshape((-1, 1)), loss_function=nn.MSELoss())
+        print("memory append complete.")
 
         obj = 0
 
@@ -133,16 +143,29 @@ class TRPOTrainer(RLTrainer):
 
             obj = obj + policy[actions[i]] / (old_policies[i][actions[i]] + 1e-7) * advantages[i]
 
+        print("appended policy.")
+
         obj = obj / len(states)
         old_policies = torch.stack(old_policies)
         policies = torch.stack(policies)
 
         kld = torch.nn.functional.kl_div(torch.log(policies + 1e-7), old_policies, reduction="batchmean")
 
+        print("calcultaed obj and kld.")
+
         self._get_update_vectors(obj, kld)
+
+        print("got full step.")
+
+        expected_improve = 0
+        for name in self.update_vectors:
+            v = self.update_vectors[name]
+            expected_improve += v.T @ v
+        print(f"expected improve : {expected_improve}")
 
         updated = False
 
+        print("line search start.")
         for i in range(self.search_iter):
             new_network = self._update_params(self.policy_net, self.alpha, i)
             new_policies = []
@@ -157,9 +180,14 @@ class TRPOTrainer(RLTrainer):
             new_kld = torch.nn.functional.kl_div(torch.log(torch.stack(new_policies) + 1e-7), old_policies, reduction="batchmean")
 
             if new_obj > obj and new_kld < self.delta:
+                print("  step size passed!")
                 self.policy_net.load_state_dict(new_network.state_dict())
                 updated = True
                 break
+            elif new_obj <= obj:
+                print("  no improve. reduce step size.")
+            else:
+                print("  kld too large. reduce step size.")
 
         if updated:
             self.batch_memory = []
@@ -176,10 +204,14 @@ class TRPOTrainer(RLTrainer):
             else:
                 pred_next_value = 0
 
-            qvalue = self.gamma * pred_next_value + self.memory_reward[-1]
+            qvalue = self.gamma * float(pred_next_value) + self.memory_reward[-1]
+
+            # update value network
+            self.value_net.train_batch(np.stack([self.memory_state[-2]]), np.stack([np.array([qvalue])]),
+                                       loss_function=nn.MSELoss())
 
             self.batch_memory.append([self.memory_state[-2], self.memory_action[-2],
-                                      qvalue, self.memory_state[-1]])
+                                      self.memory_reward[-1], self.memory_state[-1]])
 
     @abc.abstractmethod
     def check_reset(self):
