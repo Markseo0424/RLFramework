@@ -184,6 +184,8 @@ class TRPOTrainer(RLTrainer):
             new_obj = new_obj / len(states)
             new_kld = torch.nn.functional.kl_div(torch.log(torch.stack(new_policies) + 1e-7), old_policies, reduction="batchmean")
 
+            print(f"  new obj : {new_obj}, new_kld : {new_kld}")
+
             if new_obj > obj and new_kld < self.delta:
                 print("  step size passed!")
                 self.policy_net.load_state_dict(new_network.state_dict())
