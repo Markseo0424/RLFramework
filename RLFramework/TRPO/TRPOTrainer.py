@@ -12,7 +12,8 @@ from RLFramework.Agent import Agent
 
 class TRPOTrainer(RLTrainer):
     def __init__(self, policy_net: Network, value_net: Network, environment: Environment, agent: Agent,
-                 delta=0.01, alpha=0.9, gamma=0.99, CG_iter=10, search_iter=50, train_freq=128, damping=0):
+                 delta=0.01, alpha=0.5, gamma=0.99, CG_iter=10, search_iter=10, train_freq=128, damping=0.01,
+                 verbose="none"):
         super().__init__(environment=environment, agent=agent)
 
         self.policy_net = policy_net
@@ -32,11 +33,15 @@ class TRPOTrainer(RLTrainer):
         self.batch_memory = []
         self.train_freq = train_freq
 
-    def _hessian_vector_product(self, grad, param):
-        return lambda v: torch.autograd.grad(grad.T @ v, param, retain_graph=True)[0].reshape((-1, 1)) + self.damping * v
+        self.verbose = verbose.split(",")
 
-    def _conjugate_gradient(self, A, b, break_bound=1e-7):
-        print("conjugate gradient start : ")
+    def _hessian_vector_product(self, grad, param):
+        return lambda v: nn.utils.parameters_to_vector(
+            torch.autograd.grad(grad.T @ v, param, retain_graph=True)).reshape((-1, 1)) + self.damping * v
+
+    def _conjugate_gradient(self, A, b, break_bound=1e-4):
+        if self.verbose == "all" or "cg" in self.verbose:
+            print("conjugate gradient start : ")
 
         x = torch.zeros(b.shape).to(self.policy_net.device)
         r = b
@@ -49,7 +54,8 @@ class TRPOTrainer(RLTrainer):
             x = x + alpha * v
             r = r - alpha * Av
 
-            print(f"  iter {i} : r = {r.T@r}")
+            if self.verbose == "all" or "cg" in self.verbose:
+                print(f"  iter {i} : r = {(r.T @ r).item()}")
 
             if r.T @ r < break_bound:
                 return x
@@ -58,39 +64,24 @@ class TRPOTrainer(RLTrainer):
 
         return x
 
-    def _get_update_vector(self, param, obj, kld):
-        kld_grad = torch.autograd.grad(kld, param, retain_graph=True, create_graph=True)[0]
+    def _get_update_vectors(self, obj, kld):
+        param = nn.ParameterList(self.policy_net.parameters())
+
+        kld_grad = nn.utils.parameters_to_vector(torch.autograd.grad(kld, param, retain_graph=True, create_graph=True))
         kld_grad = kld_grad.reshape((-1, 1))
 
-        grad = torch.autograd.grad(obj, param, retain_graph=True)[0]
+        grad = nn.utils.parameters_to_vector(torch.autograd.grad(obj, param, retain_graph=True))
         grad = grad.reshape((-1, 1))
 
         A = self._hessian_vector_product(kld_grad, param)
         s = self._conjugate_gradient(A, grad)
 
-        beta = torch.sqrt(2 * self.delta / abs(s.T @ A(s) + 1e-7))
-
-        print(f"beta : {beta}")
+        beta = torch.sqrt(2 * self.delta / abs(s.T @ grad))
 
         update = beta * s
-        update = update.reshape(param.shape)
 
-        return grad, update
-
-    def _get_update_vectors(self, obj, kld):
-        update_vectors = {}
-        grads = {}
-
-        state_dict = self.policy_net.state_dict(keep_vars=True)
-
-        for name in state_dict:
-            param = state_dict[name]
-            grad, update = self._get_update_vector(param, obj, kld)
-            update_vectors[name] = update
-            grads[name] = grad
-
-        self.update_vectors = update_vectors
-        self.grads = grads
+        self.grads = grad
+        self.update_vectors = update
 
     def _update_params(self, source_network: torch.nn.Module, alpha, i):
         if self.update_vectors is None:
@@ -98,12 +89,11 @@ class TRPOTrainer(RLTrainer):
 
         network = copy.deepcopy(source_network)
 
-        state_dict = network.state_dict()
+        param_vector = nn.utils.parameters_to_vector(network.parameters())
 
-        for name in state_dict:
-            param = state_dict[name]
-            new_param = param + (alpha ** i) * self.update_vectors[name]
-            param.copy_(new_param)
+        new_param = param_vector + (alpha ** i) * self.update_vectors.reshape(-1)
+
+        nn.utils.vector_to_parameters(new_param, network.parameters())
 
         return network
 
@@ -118,7 +108,8 @@ class TRPOTrainer(RLTrainer):
         old_policies = []
         advantages = []
 
-        print(f"start policy optimization. memory size : {len(memory)}")
+        if self.verbose == "all" or "policy" in self.verbose:
+            print(f"start policy optimization. memory size : {len(memory)}")
 
         for _state, _action, _reward, _next_state in memory:
             current_value = self.value_net.predict(_state)
@@ -135,7 +126,8 @@ class TRPOTrainer(RLTrainer):
             old_policies.append(self.policy_net.predict(_state))
             advantages.append(advantage)
 
-        print("memory append complete.")
+        if self.verbose == "all" or "policy" in self.verbose:
+            print("memory append complete.")
 
         obj = 0
 
@@ -147,7 +139,8 @@ class TRPOTrainer(RLTrainer):
 
             obj = obj + policy[actions[i]] / (old_policies[i][actions[i]] + 1e-7) * advantages[i]
 
-        print("appended policy.")
+        if self.verbose == "all" or "policy" in self.verbose:
+            print("appended policy.")
 
         obj = obj / len(states)
         old_policies = torch.stack(old_policies)
@@ -155,22 +148,24 @@ class TRPOTrainer(RLTrainer):
 
         kld = torch.nn.functional.kl_div(torch.log(policies + 1e-7), old_policies, reduction="batchmean")
 
-        print("calcultaed obj and kld.")
+        if self.verbose == "all" or "policy" in self.verbose:
+            print("calcultaed obj and kld.")
 
         self._get_update_vectors(obj, kld)
 
-        print("got full step.")
+        if self.verbose == "all" or "policy" in self.verbose:
+            print("got full step.")
 
-        expected_improve = 0
-        for name in self.update_vectors:
-            v = self.update_vectors[name].reshape(-1)
-            g = self.grads[name].reshape(-1)
-            expected_improve += v.T @ g
-        print(f"expected improve : {expected_improve}")
+        v = self.update_vectors
+        g = self.grads
+        expected_improve = v.T @ g
+        if self.verbose == "all" or "policy" in self.verbose:
+            print(f"expected improve : {expected_improve.item()}")
 
         updated = False
 
-        print("line search start.")
+        if self.verbose == "all" or "policy" in self.verbose:
+            print("line search start.")
         for i in range(self.search_iter):
             new_network = self._update_params(self.policy_net, self.alpha, i)
             new_policies = []
@@ -182,19 +177,26 @@ class TRPOTrainer(RLTrainer):
                 new_obj = new_obj + new_pred[actions[j]] / (old_policies[j][actions[j]] + 1e-7) * advantages[j]
 
             new_obj = new_obj / len(states)
-            new_kld = torch.nn.functional.kl_div(torch.log(torch.stack(new_policies) + 1e-7), old_policies, reduction="batchmean")
+            new_kld = torch.nn.functional.kl_div(torch.log(torch.stack(new_policies) + 1e-7), old_policies,
+                                                 reduction="batchmean")
 
-            print(f"  new obj : {new_obj}, new_kld : {new_kld}")
+            if self.verbose == "all" or "policy" in self.verbose:
+                print(f"  new obj : {new_obj.item()}, new_kld : {new_kld}")
+                print(f"  improve : {new_obj.item() - obj.item()}")
 
             if new_obj > obj and new_kld < self.delta:
-                print("  step size passed!")
+                if self.verbose == "all" or "policy" in self.verbose:
+                    print("  > step size passed!")
+
                 self.policy_net.load_state_dict(new_network.state_dict())
                 updated = True
                 break
             elif new_obj <= obj:
-                print("  no improve. reduce step size.")
+                if self.verbose == "all" or "policy" in self.verbose:
+                    print("  > no improve. reduce step size.")
             else:
-                print("  kld too large. reduce step size.")
+                if self.verbose == "all" or "policy" in self.verbose:
+                    print("  > kld too large. reduce step size.")
 
         if updated:
             self.batch_memory = []
@@ -206,6 +208,9 @@ class TRPOTrainer(RLTrainer):
     def memory(self):
         self.steps += 1
         if len(self.memory_state) >= 2 and self.memory_state[-2] is not None:
+            if self.verbose == "all" or "value" in self.verbose:
+                print("train value function")
+
             if self.memory_state[-1] is not None:
                 pred_next_value = self.value_net.predict(self.memory_state[-1]).item()
             else:
@@ -213,9 +218,15 @@ class TRPOTrainer(RLTrainer):
 
             qvalue = self.gamma * float(pred_next_value) + self.memory_reward[-1]
 
+            if self.verbose == "all" or "value" in self.verbose:
+                print(f"pred_next_value : {pred_next_value}\nreward : {self.memory_reward[-1]}\nqvalue : {qvalue}")
+
             # update value network
-            self.value_net.train_batch(np.stack([self.memory_state[-2]]), np.stack([np.array([qvalue])]),
-                                       loss_function=nn.MSELoss())
+            for i in range(3):
+                loss = self.value_net.train_batch(np.stack([self.memory_state[-2]]), np.stack([np.array([qvalue])]),
+                                                  loss_function=nn.MSELoss())
+                if self.verbose == "all" or "value" in self.verbose:
+                    print(f"  > loss: {loss}")
 
             self.batch_memory.append([self.memory_state[-2], self.memory_action[-2],
                                       self.memory_reward[-1], self.memory_state[-1]])
@@ -227,4 +238,3 @@ class TRPOTrainer(RLTrainer):
     @abc.abstractmethod
     def reset_params(self):
         pass
-
