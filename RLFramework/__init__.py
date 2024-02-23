@@ -9,3 +9,4 @@ from .A2C import *
 from .A3C import *
 from .TRPO import *
 from .PPO import *
+from .DDPG import *
