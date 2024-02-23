@@ -12,7 +12,8 @@ from RLFramework.Agent import Agent
 
 class PPOTrainer(RLTrainer):
     def __init__(self, policy_net: Network, value_net: Network, environment: Environment, agent: Agent,
-                 epsilon=0.01, gamma=0.99, train_freq=128, entropy_weight=0.1, verbose="none"):
+                 epsilon=0.01, gamma=0.99, miniabtch_size=128, minibatch_num=8, policy_epoch=5,
+                 entropy_weight=0.1, verbose="none"):
         super().__init__(environment=environment, agent=agent)
 
         self.policy_net = policy_net
@@ -24,7 +25,9 @@ class PPOTrainer(RLTrainer):
 
         self.steps = 0
         self.batch_memory = []
-        self.train_freq = train_freq
+        self.train_freq = miniabtch_size * minibatch_num
+        self.minibatch_size = miniabtch_size
+        self.policy_epoch = policy_epoch
 
         self.verbose = verbose.split(",")
 
@@ -38,26 +41,48 @@ class PPOTrainer(RLTrainer):
         if self.verbose == "all" or "policy" in self.verbose:
             print(f"start policy optimization. memory size : {len(memory)}")
 
-        loss = 0
+        save_old_policy = []
+        save_advantage = []
 
-        for _state, _action, _reward, _next_state in memory:
-            current_policy = self.policy_net(_state)
-            old_policy = current_policy.detach()
-            current_value = self.value_net.predict(_state)
-            pred_next_value = 0 if _next_state is None else self.value_net.predict(_next_state)
+        losses = []
 
-            r = current_policy[_action] / old_policy[_action]
-            advantage = self.gamma * pred_next_value - current_value
+        for i in range(self.policy_epoch):
+            loss = 0
+            for j, (_state, _action, _reward, _next_state) in enumerate(memory):
+                if i == 0:
+                    old_policy = self.policy_net.predict(_state)
+                    current_value = self.value_net.predict(_state)
+                    pred_next_value = 0 if _next_state is None else self.value_net.predict(_next_state)
+                    advantage = self.gamma * pred_next_value - current_value
 
-            clip_loss = torch.minimum(r * advantage, torch.clip(r, 1 - self.epsilon, 1 + self.epsilon) * advantage)
-            entropy_loss = - current_policy[_action] * torch.log(current_policy[_action] + 1e-7)
+                    save_old_policy.append(old_policy)
+                    save_advantage.append(advantage)
 
-            loss = loss - clip_loss - self.entropy_weight * entropy_loss
+                else:
+                    old_policy = save_old_policy[j]
+                    advantage = save_advantage[j]
 
-        loss = loss / len(memory)
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
+                current_policy = self.policy_net(torch.FloatTensor(_state).to(self.policy_net.device))
+                r = current_policy[_action] / old_policy[_action]
+
+                clip_loss = torch.minimum(r * advantage, torch.clip(r, 1 - self.epsilon, 1 + self.epsilon) * advantage)
+                entropy_loss = - torch.sum(current_policy * torch.log(current_policy + 1e-7))
+
+                loss = loss - clip_loss - self.entropy_weight * entropy_loss
+
+                if (j + 1) % self.minibatch_size == 0:
+                    loss = loss / len(memory)
+
+                    optim.zero_grad()
+                    loss.backward()
+                    optim.step()
+
+                    losses.append(loss.item())
+                    loss = 0
+
+        self.batch_memory = []
+
+        return sum(losses) / len(losses)
 
     def memory(self):
         self.steps += 1
