@@ -9,19 +9,21 @@ from RLFramework.Network import Network
 from RLFramework.Environment import Environment
 from RLFramework.Agent import Agent
 from .ReplayBuffer import ReplayBuffer
-import numpy as np
 
 
-class DDPGTrainer(RLTrainer):
-    def __init__(self, policy_net: Network, q_net: Network, environment: Environment, agent: Agent,
+class SACTrainer(RLTrainer):
+    def __init__(self, policy_net: Network, value_net: Network, q_nets: tuple[Network], environment: Environment, agent: Agent,
                  batch_size=128, start_train_step=10000, train_freq=500, buffer_len=1000000, slot_weights: dict = None,
                  gamma=0.99, tau=0.001, verbose="none"):
         super().__init__(environment=environment, agent=agent)
 
+        assert len(q_nets) == 2
+
         self.policy_net = policy_net
-        self.target_policy_net = copy.deepcopy(policy_net)
-        self.q_net = q_net
-        self.target_q_net = copy.deepcopy(q_net)
+        self.q_net_1 = q_nets[0]
+        self.q_net_2 = q_nets[1]
+        self.value_net = value_net
+        self.target_value_net = copy.deepcopy(value_net)
 
         self.batch_size = batch_size
 
@@ -51,75 +53,91 @@ class DDPGTrainer(RLTrainer):
                 target_param * (1.0 - self.tau) + source_param * self.tau
             )
 
+    def to_tensor(self, x):
+        return torch.FloatTensor(x).to(self.value_net.device)
+
     def get_batches(self, memory):
         states = []
         actions = []
-        target_q = []
+        log_probs = []
+        target_qs = []
 
         for _state, _action, _reward, _next_state in memory:
-            if _next_state is None:
-                next_Q = 0
-            else:
-                pred_next_action = self.target_policy_net.predict(_next_state).cpu().detach().numpy()
-                next_Q = self.target_q_net.predict(np.concatenate([_next_state, pred_next_action]))
-
-            y = torch.tensor([float(_reward + self.gamma * next_Q)])
-
-            target_q.append(y)
             states.append(_state)
-            actions.append(_action)
+            actions.append(_action[0])
+            log_probs.append(_action[1])
+            if _next_state is None:
+                target_qs.append(float(_reward))
+            else:
+                target_qs.append(float(_reward + self.gamma * self.target_value_net.predict(_next_state)))
 
         states = np.stack(states)
         actions = np.stack(actions)
-        target_q = torch.stack(target_q).to(self.q_net.device)
+        log_probs = np.stack(log_probs)
+        target_qs = np.stack(target_qs)
 
-        return states, actions, target_q
+        return states, actions, log_probs, target_qs
 
     def train(self, state, action, reward, next_state):
-        critic_optim = self.q_net.optimizer
-        actor_optim = self.policy_net.optimizer
+        assert getattr(self.policy_net, "evaluate_prob", None) is not None, "Define evaluate_prob(state_batch, action_batch) in policy net."
 
-        # print("========== train ============")
         memory = self.replay_buffer.sample(self.batch_size)
-        state_batch, action_batch, target_q = self.get_batches(memory)
+        state_batch, action_batch, log_prob_batch, target_q_batch = self.get_batches(memory)
 
-        # print("========== critic loss calc ============")
+        # Value net optimization
+        Jv_1 = 0.5 * torch.mean(torch.pow(
+            self.value_net(self.to_tensor(state_batch)) -
+            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1)) +
+            log_prob_batch
+        , 2))
 
-        critic_optim.zero_grad()
+        Jv_2 = 0.5 * torch.mean(torch.pow(
+            self.value_net(self.to_tensor(state_batch)) -
+            self.q_net_2.predict(np.concatenate([state_batch, action_batch], axis=1)) +
+            log_prob_batch
+        , 2))
 
-        pred_Q = self.q_net(
-            torch.cat([torch.FloatTensor(state_batch), torch.FloatTensor(action_batch)], dim=1).to(self.q_net.device))
+        Jv = torch.minimum(Jv_1, Jv_2)
 
-        critic_loss = nn.MSELoss()(pred_Q, target_q)
+        self.value_net.optimizer.zero_grad()
+        Jv.backward()
+        self.value_net.optimizer.step()
 
-        critic_loss.backward()
-        critic_optim.step()
+        # Q net optimization
+        Jq = 0.5 * torch.mean(torch.pow(
+            self.q_net_1(self.to_tensor(np.concatenate([state_batch, action_batch], axis=1))) -
+            target_q_batch
+        )) + 0.5 * torch.mean(torch.pow(
+            self.q_net_2(self.to_tensor(np.concatenate([state_batch, action_batch], axis=1))) -
+            target_q_batch
+        ))
 
-        # print(
-        #     f"  state : {state_batch[0]}, action: {action_batch[0]}, target_Q : {target_q[0].item()}, pred_Q : {pred_Q[0].item()}")
+        self.q_net_1.optimizer.zero_grad()
+        self.q_net_2.optimizer.zero_grad()
+        Jq.backward()
+        self.q_net_1.optimizer.step()
+        self.q_net_2.optimizer.step()
 
-        # print("========== actor loss calc ============")
+        # Policy optimization
 
-        actor_optim.zero_grad()
+        Jpi_1 = torch.mean(
+            torch.log(self.policy_net.evaluate_prob(state_batch, action_batch) + 1e-7) -
+            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1))
+        )
 
-        pred_action = self.policy_net(torch.FloatTensor(state_batch).to(self.policy_net.device))
-        pred_Q = self.q_net(torch.cat([torch.FloatTensor(state_batch).to(self.q_net.device), pred_action], dim=1))
+        Jpi_2 = torch.mean(
+            torch.log(self.policy_net.evaluate_prob(state_batch, action_batch) + 1e-7) -
+            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1))
+        )
 
-        actor_loss = -torch.mean(pred_Q)
+        Jpi = torch.minimum(Jpi_1, Jpi_2)
 
-        actor_loss.backward()
-        actor_optim.step()
+        self.policy_net.optimizer.zero_grad()
+        Jpi.backward()
+        self.policy_net.optimizer.step()
 
-        # print(
-        #    f"  state : {state_batch[0]}, action: {action_batch[0]}, pred_action : {pred_action[0]}, pred_Q : {pred_Q[0].item()}")
-
-        self.soft_update(self.target_q_net, self.q_net)
-        self.soft_update(self.target_policy_net, self.policy_net)
-
-        # print("======================")
-        # print(actor_loss.item(), critic_loss.item())
-
-        return actor_loss.item(), critic_loss.item()
+        # Soft Update
+        self.soft_update(self.target_value_net, self.value_net)
 
     def memory(self):
         """
