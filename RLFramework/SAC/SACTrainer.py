@@ -12,12 +12,11 @@ from .ReplayBuffer import ReplayBuffer
 
 
 class SACTrainer(RLTrainer):
-    def __init__(self, policy_net: Network, value_net: Network, q_nets: tuple[Network], environment: Environment, agent: Agent,
+    def __init__(self, policy_net: Network, value_net: Network, q_nets: tuple[Network, Network],
+                 environment: Environment, agent: Agent,
                  batch_size=128, start_train_step=10000, train_freq=500, buffer_len=1000000, slot_weights: dict = None,
-                 gamma=0.99, tau=0.001, verbose="none"):
+                 alpha=0.2, gamma=0.99, tau=0.001, verbose="none"):
         super().__init__(environment=environment, agent=agent)
-
-        assert len(q_nets) == 2
 
         self.policy_net = policy_net
         self.q_net_1 = q_nets[0]
@@ -31,6 +30,7 @@ class SACTrainer(RLTrainer):
         self.train_freq = train_freq
         self.timestep = 0
 
+        self.alpha = alpha
         self.gamma = gamma
         self.tau = tau
 
@@ -60,57 +60,61 @@ class SACTrainer(RLTrainer):
         states = []
         actions = []
         log_probs = []
-        target_qs = []
+        rewards = []
+        next_states = []
+        dones = []
 
         for _state, _action, _reward, _next_state in memory:
             states.append(_state)
             actions.append(_action[0])
             log_probs.append(_action[1])
-            if _next_state is None:
-                target_qs.append(float(_reward))
-            else:
-                target_qs.append(float(_reward + self.gamma * self.target_value_net.predict(_next_state)))
+            rewards.append(_reward)
+            next_states.append(_next_state if _next_state is not None else _state)
+            dones.append(1 if _next_state is None else 0)
 
         states = np.stack(states)
         actions = np.stack(actions)
         log_probs = np.stack(log_probs)
-        target_qs = np.stack(target_qs)
+        rewards = np.stack(rewards)
+        next_states = np.stack(next_states)
+        dones = np.stack(dones)
 
-        return states, actions, log_probs, target_qs
+        return states, actions, log_probs, rewards, next_states, dones
 
     def train(self, state, action, reward, next_state):
-        assert getattr(self.policy_net, "evaluate_prob", None) is not None, "Define evaluate_prob(state_batch, action_batch) in policy net."
+        assert getattr(self.policy_net, "sample_action",
+                       None) is not None, "Define sample_action(policy_batch) in policy net."
 
         memory = self.replay_buffer.sample(self.batch_size)
-        state_batch, action_batch, log_prob_batch, target_q_batch = self.get_batches(memory)
+        state_batch, action_batch, log_prob_batch, reward_batch, next_state_batch, done_batch = self.get_batches(memory)
 
         # Value net optimization
-        Jv_1 = 0.5 * torch.mean(torch.pow(
-            self.value_net(self.to_tensor(state_batch)) -
-            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1)) +
-            log_prob_batch
-        , 2))
+        pred_q = torch.minimum(
+            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1)),
+            self.q_net_2.predict(np.concatenate([state_batch, action_batch], axis=1))
+        )
 
-        Jv_2 = 0.5 * torch.mean(torch.pow(
+        Jv = 0.5 * torch.mean(torch.pow(
             self.value_net(self.to_tensor(state_batch)) -
-            self.q_net_2.predict(np.concatenate([state_batch, action_batch], axis=1)) +
-            log_prob_batch
-        , 2))
-
-        Jv = torch.minimum(Jv_1, Jv_2)
+            pred_q +
+            self.alpha * self.to_tensor(log_prob_batch)
+            , 2))
 
         self.value_net.optimizer.zero_grad()
         Jv.backward()
         self.value_net.optimizer.step()
 
         # Q net optimization
-        Jq = 0.5 * torch.mean(torch.pow(
+        target_q_batch = self.to_tensor(reward_batch.reshape(-1, 1)) + self.gamma * self.target_value_net.predict(
+            next_state_batch) * self.to_tensor(1 - done_batch).reshape(-1, 1)
+
+        Jq = torch.mean(torch.pow(
             self.q_net_1(self.to_tensor(np.concatenate([state_batch, action_batch], axis=1))) -
             target_q_batch
-        )) + 0.5 * torch.mean(torch.pow(
+            , 2)) + torch.mean(torch.pow(
             self.q_net_2(self.to_tensor(np.concatenate([state_batch, action_batch], axis=1))) -
             target_q_batch
-        ))
+            , 2))
 
         self.q_net_1.optimizer.zero_grad()
         self.q_net_2.optimizer.zero_grad()
@@ -120,17 +124,17 @@ class SACTrainer(RLTrainer):
 
         # Policy optimization
 
-        Jpi_1 = torch.mean(
-            torch.log(self.policy_net.evaluate_prob(state_batch, action_batch) + 1e-7) -
-            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1))
+        policy_batch = self.policy_net(self.to_tensor(state_batch))
+        pred_action_batch, pred_log_prob_batch = self.policy_net.sample_action(policy_batch)
+
+        q_val = torch.minimum(
+            self.q_net_1(torch.cat([self.to_tensor(state_batch), pred_action_batch], axis=1)),
+            self.q_net_2(torch.cat([self.to_tensor(state_batch), pred_action_batch], axis=1))
         )
 
-        Jpi_2 = torch.mean(
-            torch.log(self.policy_net.evaluate_prob(state_batch, action_batch) + 1e-7) -
-            self.q_net_1.predict(np.concatenate([state_batch, action_batch], axis=1))
+        Jpi = torch.mean(
+            self.alpha * pred_log_prob_batch - q_val
         )
-
-        Jpi = torch.minimum(Jpi_1, Jpi_2)
 
         self.policy_net.optimizer.zero_grad()
         Jpi.backward()
@@ -139,13 +143,13 @@ class SACTrainer(RLTrainer):
         # Soft Update
         self.soft_update(self.target_value_net, self.value_net)
 
+        return Jv, Jq, Jpi
+
     def memory(self):
         """
         Saves data of (state, action, reward, next state) to the replay buffer.
         Can be overridden when need to memorize other values.
         """
-
-        self.timestep += 1
 
         if self.environment.timestep >= 1:
             state, action, reward, next_state = self.memory_state[-2], self.memory_action[-2], self.memory_reward[
