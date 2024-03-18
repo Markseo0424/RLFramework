@@ -147,6 +147,9 @@ class RLTrainer(object):
             self.logger.load(base_path + f"{version}_log.json")
 
     def run(self, max_step=None, max_episode=None):
+        if self.logger is not None:
+            self.logger.start_realtime_plot()
+
         try:
             while True:
                 self.step()
@@ -159,3 +162,6 @@ class RLTrainer(object):
 
         except KeyboardInterrupt:
             print("KeyboardInterrupt")
+
+        if self.logger is not None:
+            self.logger.end_realtime_plot()

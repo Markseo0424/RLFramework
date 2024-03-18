@@ -1,4 +1,6 @@
 import os
+import time
+
 import numpy as np
 import matplotlib.pyplot as plt
 import threading
@@ -25,9 +27,7 @@ class Logger(object):
             for line in self.kwargs[title].keys():
                 self.plots[title][line] = []
 
-        if self.enable_realtime_plot:
-            self.thread = threading.Thread(target=self.start_realtime_plot)
-            self.thread.start()
+        self.__thread = None
 
     def __getattr(self, obj, name: str):
         if not name:
@@ -77,7 +77,7 @@ class Logger(object):
             for line in self.plots[title].keys():
                 self.plots[title][line].append(self.__getattr(obj, self.kwargs[title][line]))
 
-    def start_realtime_plot(self):
+    def __realtime_plot(self):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
 
@@ -143,6 +143,20 @@ class Logger(object):
                 plt.pause(0.1)
 
             plt.show()
+
+    def start_realtime_plot(self):
+        if not self.enable_realtime_plot:
+            return
+
+        self.__thread = threading.Thread(target=self.__realtime_plot)
+        self.__thread.daemon = True
+        self.__thread.start()
+
+    def end_realtime_plot(self):
+        if self.__thread is None:
+            return
+
+        self.__thread = None
 
     def save(self, path):
         jsonData = self.plots

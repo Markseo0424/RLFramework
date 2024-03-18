@@ -1,12 +1,13 @@
 import torch
 import torch.nn as nn
+from RLFramework import SampleIterator
 from torch.optim.adam import Adam
 from .. import ValueOptimizer
 from ...traj import Sample
 
 
 class SelfValueOptim(ValueOptimizer):
-    def __init__(self, lr=1e-4, epoch=1, gamma=1, clip_grad=None, level=1):
+    def __init__(self, lr=1e-4, epoch=1, batch_size=None, gamma=1, clip_grad=None, level=1):
         super().__init__(
             required_list=[
                 "v"
@@ -15,6 +16,7 @@ class SelfValueOptim(ValueOptimizer):
 
         self.lr = lr
         self.epoch = epoch
+        self.batch_size = batch_size
 
         self.gamma = gamma
 
@@ -32,10 +34,11 @@ class SelfValueOptim(ValueOptimizer):
         next_v = self.v(next_states, eval=True)
         target_v = rewards.reshape(-1, 1) + constants.reshape(-1, 1) * next_v
 
-        for _ in range(self.epoch):
-            pred_v = self.v(states)
+        for _states, _target_v in SampleIterator(states, target_v,
+                                                 epoch=self.epoch, batch_size=self.batch_size, random=True):
+            pred_v = self.v(_states)
 
-            loss = nn.MSELoss()(pred_v, target_v.item())
+            loss = nn.MSELoss()(pred_v, _target_v.item())
 
             if self.clip_grad is not None:
                 nn.utils.clip_grad_norm_(self.v.parameters(), self.clip_grad)
