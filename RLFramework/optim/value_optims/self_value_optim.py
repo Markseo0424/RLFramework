@@ -6,7 +6,7 @@ from ...traj import Sample, SampleIterator
 
 
 class SelfValueOptim(ValueOptimizer):
-    def __init__(self, lr=1e-4, epoch=1, batch_size=None, gamma=1, clip_grad=None, level=1):
+    def __init__(self, lr=1e-4, epoch=1, batch_size=None, gamma=1, clip_grad=None, level=1, random_sample=True):
         super().__init__(
             required_list=[
                 "v"
@@ -22,6 +22,8 @@ class SelfValueOptim(ValueOptimizer):
         self.clip_grad = clip_grad
         self.level = level
 
+        self.random_sample = random_sample
+
         self.v_optim = None
 
     def init_optim(self):
@@ -34,7 +36,8 @@ class SelfValueOptim(ValueOptimizer):
         target_v = rewards.reshape(-1, 1) + constants.reshape(-1, 1) * next_v
 
         for _states, _target_v in SampleIterator(states, target_v,
-                                                 epoch=self.epoch, batch_size=self.batch_size, random=True):
+                                                 epoch=self.epoch, batch_size=self.batch_size,
+                                                 random=self.random_sample):
             pred_v = self.v(_states)
 
             loss = nn.MSELoss()(pred_v, _target_v.item())

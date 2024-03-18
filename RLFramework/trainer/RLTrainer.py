@@ -23,7 +23,8 @@ class RLTrainer(object):
         self.memory = memory
         self.logger = logger
 
-        self.interval_functions = {"step": [], "episode": []}
+        self.interval_functions = []
+        self.interval_timers = []
 
         self.__data = self.agent.policy_net.get_data()
 
@@ -45,24 +46,22 @@ class RLTrainer(object):
         for optim in self.optimizers:
             optim.feed(self.networks)
 
-    def add_interval(self, function, step=None, episode=None, minimum=0):
-        assert step is None and episode is not None or \
-               step is not None and episode is None, "least one should be not None."
-
-        if step is not None:
-            self.interval_functions["step"].append((minimum, step, function))
-        else:
-            self.interval_functions["episode"].append((minimum, episode, function))
+    def add_interval(self, function, step=None, episode=None, min_step=0, min_episode=0):
+        self.interval_functions.append((function, min_step, min_episode, step, episode))
+        self.interval_timers.append((0, 0))
 
     def __execute_interval(self, terminate):
-        for minimum, interval, func in self.interval_functions["step"]:
-            if self.timestep >= minimum and self.timestep % interval == 0:
-                func()
+        for i, (func, min_step, min_episode, step, episode) in enumerate(self.interval_functions):
+            if self.timestep < min_step or self.episode < min_episode:
+                continue
 
-        if terminate:
-            for minimum, interval, func in self.interval_functions["episode"]:
-                if self.episode >= minimum and self.episode % interval == 0:
+            last_step, last_episode = self.interval_timers[i]
+
+            if episode is None or terminate:
+                if ((step is None or self.timestep - last_step >= step) and
+                        (episode is None or self.episode - last_episode >= episode)):
                     func()
+                    self.interval_timers[i] = (self.timestep, self.episode)
 
     def step(self):
         old_state = self.env.get_state()

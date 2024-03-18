@@ -6,7 +6,8 @@ from ...traj import Sample, SampleIterator
 
 
 class ClippedSurrogatePolicyOptim(PolicyOptimizer):
-    def __init__(self, lr=1e-4, epoch=10, batch_size=64, gamma=0.99, epsilon=0.2, lamda=0.5, entropy_weight=0.01, use_target_v=False):
+    def __init__(self, lr=1e-4, epoch=10, batch_size=None, gamma=0.99, epsilon=0.2, lamda=0.5, entropy_weight=0.01,
+                 use_target_v=False, random_sample=True):
         super().__init__(
             required_list=[
                 "v_target" if use_target_v else "v", "pi"
@@ -24,6 +25,7 @@ class ClippedSurrogatePolicyOptim(PolicyOptimizer):
         self.entropy_weight = entropy_weight
 
         self.use_target_v = use_target_v
+        self.random_sample = random_sample
 
         self.pi_optim = None
 
@@ -39,7 +41,7 @@ class ClippedSurrogatePolicyOptim(PolicyOptimizer):
 
         for _states, _actions, _advantages, _old_logprobs \
                 in SampleIterator(states, actions, advantages, old_logprobs,
-                                  epoch=self.epoch, batch_size=self.batch_size, random=True):
+                                  epoch=self.epoch, batch_size=self.batch_size, random=self.random_sample):
 
             policy = self.pi(_states)
             logprobs, entropy = self.pi.get_logprob(policy, _actions)

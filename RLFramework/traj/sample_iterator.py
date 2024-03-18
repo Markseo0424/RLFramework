@@ -12,7 +12,7 @@ class SampleIterator(object):
         self.sample_idx = None
 
         self.n = self.args[0].shape[0]
-        self.batches = self.n // self.batch_size + 1 if batch_size is not None else 1
+        self.batches = int(np.ceil(self.n / self.batch_size)) if batch_size is not None else 1
 
         self.current_epoch = 0
         self.current_batch = 0
