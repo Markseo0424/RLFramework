@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
-from RLFramework import SampleIterator
 from torch.optim.adam import Adam
 from .. import ValueOptimizer
-from ...traj import Sample
+from ...traj import Sample, SampleIterator
 
 
 class SelfValueOptim(ValueOptimizer):
