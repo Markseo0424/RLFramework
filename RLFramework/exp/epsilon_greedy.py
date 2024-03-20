@@ -31,9 +31,9 @@ class EpsilonGreedy(Exploration):
 
         if np.random.random() < self.epsilon:
             if numpy:
-                res = np.array(self.action_space.sample_idx(x.shape[0]))
+                res = np.array(self.action_space.sample(x.shape[0]))
             else:
-                res = torch.tensor(self.action_space.sample_idx(x.shape[0])).to(x.device)
+                res = torch.tensor(self.action_space.sample(x.shape[0])).to(x.device)
         else:
             if numpy:
                 res = self.action_space.greedy(x).detach().cpu().numpy()
