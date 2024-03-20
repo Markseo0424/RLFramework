@@ -17,6 +17,8 @@ class RLTrainer(object):
         self.networks = networks
 
         self.losses = []
+        for _ in self.optimizers:
+            self.losses.append(0)
 
         self.timestep = 1
         self.episode = 1
