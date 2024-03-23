@@ -19,21 +19,21 @@ class ReplayMemory(object):
 
         # cut if element is too many
         if len(self) > self.max_len:
-            self._memory = self._memory[-self.max_len]
+            self._memory = self._memory[-self.max_len:]
 
     def append_element(self, element: TrajectoryElement):
         self._memory.append(element)
 
         # cut if element is too many
         if len(self) > self.max_len:
-            self._memory = self._memory[-self.max_len]
+            self._memory = self._memory[-self.max_len:]
 
     def append_traj(self, traj: Trajectory):
         self._memory = self._memory + traj.get_elements()
 
         # cut if element is too many
         if len(self) > self.max_len:
-            self._memory = self._memory[-self.max_len]
+            self._memory = self._memory[-self.max_len:]
 
     def sample(self):
         sample = np.random.randint(len(self), size=(self.batch_size,))

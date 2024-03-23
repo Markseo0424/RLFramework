@@ -1,7 +1,7 @@
 from ..net import *
 
 
-class RLAgent(object):
+class Agent(object):
     def __init__(self, policy: PolicyNet | QNet, greedy=False):
         self._state = None
         self.policy_net = policy

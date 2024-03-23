@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 from torch.optim.adam import Adam
 from .. import QOptimizer
-from ...traj import Sample
+from ...traj import Sample, SampleIterator
 
 
 class TargetQOptim(QOptimizer):
-    def __init__(self, lr=1e-4, gamma=1, clip_grad=None, level=1):
+    def __init__(self, lr=1e-4, epoch=1, batch_size=None, gamma=1, clip_grad=None, level=1, random_sample=False):
         super().__init__(
             required_list=[
                 "q", "q_target"
@@ -14,10 +14,15 @@ class TargetQOptim(QOptimizer):
         )
 
         self.lr = lr
+        self.epoch = epoch
+        self.batch_size = batch_size
+
         self.gamma = gamma
 
         self.clip_grad = clip_grad
         self.level = level
+
+        self.random_sample = random_sample
 
         self.q_optim = None
 
@@ -27,17 +32,21 @@ class TargetQOptim(QOptimizer):
     def step(self, x: Sample):
         states, actions, _, rewards, next_states, constants = x.get_batch(gamma=self.gamma, level=self.level)
 
-        pred_q = self.q(states, actions)
-        next_q = torch.max(self.q_target(next_states, eval=True), dim=1).values
-        target_q = rewards + constants * next_q
+        for _states, _actions, _rewards, _next_states, _constants in SampleIterator(
+            states, actions, rewards, next_states, constants,
+            epoch=self.epoch, batch_size=self.batch_size, random=self.random_sample
+        ):
+            pred_q = self.q(_states, _actions)
+            next_q = torch.max(self.q_target(_next_states, eval=True), dim=1).values
+            target_q = _rewards + _constants * next_q
 
-        loss = nn.MSELoss()(pred_q, target_q.item())
+            loss = nn.MSELoss()(pred_q, target_q.item())
 
-        if self.clip_grad is not None:
-            nn.utils.clip_grad_norm_(self.q.parameters(), self.clip_grad)
+            if self.clip_grad is not None:
+                nn.utils.clip_grad_norm_(self.q.parameters(), self.clip_grad)
 
-        self.q_optim.zero_grad()
-        loss.backward()
-        self.q_optim.step()
+            self.q_optim.zero_grad()
+            loss.backward()
+            self.q_optim.step()
 
         return loss.item()

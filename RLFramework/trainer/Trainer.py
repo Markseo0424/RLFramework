@@ -7,8 +7,8 @@ from ..net import *
 from ..utils import Logger
 
 
-class RLTrainer(object):
-    def __init__(self, agent: RLAgent, env: RLEnvironment, optimizers: list[Optimizer],
+class Trainer(object):
+    def __init__(self, agent: Agent, env: Environment, optimizers: list[Optimizer],
                  memory: ReplayMemory = None, logger: Logger = None, test_mode=False, **networks):
         self.agent = agent
         self.env = env

@@ -1,7 +1,7 @@
 from ..space import *
 
 
-class RLEnvironment(object):
+class Environment(object):
     def __init__(self, observation_space: Space, action_space: Space):
         self.observation_space = observation_space
         self.action_space = action_space

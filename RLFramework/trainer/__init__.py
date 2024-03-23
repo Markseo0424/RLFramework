@@ -1,1 +1,1 @@
-from .RLTrainer import RLTrainer
+from .Trainer import Trainer

@@ -1,2 +1,2 @@
-from .RLAgent import RLAgent
-from .RLEnvironment import RLEnvironment
+from .Agent import Agent
+from .Environment import Environment

@@ -69,13 +69,20 @@ class Gaussian(Exploration):
 
         mean, std = x[:, 0, :], x[:, 1, :]
 
+        action = torch.tanh(mean)
+
+        scale = torch.FloatTensor(self.scale).to(x)
+        bias = torch.FloatTensor(self.bias).to(x)
+
+        action = action * scale + bias
+
         if unbatched:
-            mean = mean.reshape(mean.shape[1:])
+            action = action.reshape(action.shape[1:])
 
         if numpy:
-            mean = mean.detach().cpu().numpy()
+            action = action.detach().cpu().numpy()
 
-        return mean, 0
+        return action, 0
 
     def get_logprob(self, x, action, numpy=False):
         assert x.shape[-len(self.policy_shape):] == self.policy_shape, f"x must have shape of {self.policy_shape}."
