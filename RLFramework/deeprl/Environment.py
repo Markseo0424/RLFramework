@@ -55,12 +55,13 @@ class Environment(object):
 
     def update(self, state, action):
         """
-        :param state: Current state of environment.
-        :param action: Current action of agent.
-        :return: Next state of environment, whether env is done. None if it is termination state.
         Update parameters, return next state.
         Corresponds to P(s,a).
         States must be unbatched numpy array when using Deep RL Trainers.
+
+        :param state: Current state of environment.
+        :param action: Current action of agent.
+        :return: Next state of environment, whether env is done. You can use None if it is termination state.
         """
         return state, False
 

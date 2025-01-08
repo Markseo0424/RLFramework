@@ -32,7 +32,7 @@ class Trainer(object):
         self.interval_functions = []
         self.interval_timers = []
 
-        self.__force_action = None
+        self.__perturbation = None
 
         self.__data = self.agent.policy_net.get_data()
 
@@ -77,15 +77,15 @@ class Trainer(object):
                     func(*args, **kwargs)
                     self.interval_timers[i] = (self.timestep, self.episode)
 
-    def step(self, force_action=None):
+    def step(self, perturbation=None):
         old_state = self.env.get_state()
         self.agent.set_state(old_state)
 
         self.agent.policy_net.set_data(**self.__data)
         action, logprob = self.agent.act()
 
-        if force_action is not None:
-            self.env.act(force_action)
+        if perturbation is not None:
+            self.env.act(action + perturbation)
         else:
             self.env.act(action)
 
@@ -169,8 +169,8 @@ class Trainer(object):
         if self.logger is not None:
             self.logger.load(base_path + f"_{version}_log.json")
 
-    def force_action(self, action):
-        self.__force_action = action
+    def add_perturbation(self, action):
+        self.__perturbation = action
 
     def run(self, test_mode=False, max_step=None, max_episode=None):
         if self.logger is not None:
@@ -184,12 +184,12 @@ class Trainer(object):
 
         try:
             while True:
-                forced = self.__force_action is not None
+                perturbated = self.__perturbation is not None
 
-                self.step(self.__force_action)
+                self.step(self.__perturbation)
 
-                if forced:
-                    self.__force_action = None
+                if perturbated:
+                    self.__perturbation = None
 
                 if max_step is not None and self.timestep > max_step:
                     print("max step reached")
